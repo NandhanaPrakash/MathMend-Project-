@@ -26,36 +26,39 @@ from collections import defaultdict
 import statistics
 
 # MLX imports
-try:
-    from mlx_lm import load, generate
-    MLX_AVAILABLE = True
-except ImportError:
-    MLX_AVAILABLE = False
-    print("⚠️ MLX not available. Install with: pip install mlx-lm")
+# try:
+#     from mlx_lm import load, generate
+#     MLX_AVAILABLE = True
+# except ImportError:
+#     MLX_AVAILABLE = False
+#     print("⚠️ MLX not available. Install with: pip install mlx-lm")
 
 
 # --------------------------
 # MLX Mistral Model Initialization
 # --------------------------
-def initialize_mlx_mistral_model():
-    """Initialize MLX-based Mistral model for local LLM inference"""
-    if not MLX_AVAILABLE:
-        print("❌ MLX not available. Cannot load Mistral model.")
-        return None, None
+# def initialize_mlx_mistral_model():
+#     """Initialize MLX-based Mistral model for local LLM inference"""
+#     if not MLX_AVAILABLE:
+#         print("❌ MLX not available. Cannot load Mistral model.")
+#         return None, None
     
-    try:
-        MODEL_ID = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
-        print("🔄 Loading MLX Mistral model...")
-        print("📥 This may take a few minutes on first run as the model downloads...")
+#     try:
+#         MODEL_ID = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
+#         print("🔄 Loading MLX Mistral model...")
+#         print("📥 This may take a few minutes on first run as the model downloads...")
         
-        model, tokenizer = load(MODEL_ID, tokenizer_config={"trust_remote_code": True})
+#         model, tokenizer = load(MODEL_ID, tokenizer_config={"trust_remote_code": True})
         
-        print("✅ MLX Mistral Model Loaded Successfully!")
-        return model, tokenizer
-    except Exception as e:
-        print(f"❌ Failed to load MLX Mistral model: {e}")
-        print("💡 Try running: pip install --upgrade mlx-lm")
-        return None, None
+#         print("✅ MLX Mistral Model Loaded Successfully!")
+#         return model, tokenizer
+#     except Exception as e:
+#         print(f"❌ Failed to load MLX Mistral model: {e}")
+#         print("💡 Try running: pip install --upgrade mlx-lm")
+#         return None, None
+
+
+
 
 
 # --------------------------
@@ -63,6 +66,18 @@ def initialize_mlx_mistral_model():
 # --------------------------
 class SymbolicSolver(dspy.Module):
     """Attempts to solve equations symbolically using SymPy"""
+
+    def _is_numeric_equation(self, eq):
+            try:
+                if isinstance(eq, str) and "=" in eq:
+                    lhs, rhs = eq.split("=")
+                    float(sympify(lhs.strip()))
+                    float(sympify(rhs.strip()))
+                    return True
+            except:
+                return False
+
+
     
     def _clean_equation_string(self, eq_str):
         """Clean equation string to make it SymPy-compatible"""
@@ -84,7 +99,7 @@ class SymbolicSolver(dspy.Module):
         eq_str = re.sub(r'\s+', ' ', eq_str).strip()
         
         # Handle specific patterns
-        eq_str = eq_str.replace(' x ', ' * ')  # word "x" to multiplication
+        # eq_str = eq_str.replace(' x ', ' * ')  # REMOVED: Breaks variable 'x'
         eq_str = eq_str.replace('Area =', 'A =')
         eq_str = eq_str.replace('length x width', 'l * w')
         
@@ -101,13 +116,16 @@ class SymbolicSolver(dspy.Module):
     def forward(self, canonical_equations):
         try:
             if not canonical_equations:
-                return dspy.Prediction(
-                    solution={}, 
-                    success=False, 
-                    residuals={}, 
-                    error_msg="No equations provided"
-                )
-            
+                if all(self._is_numeric_equation(eq) for eq in canonical_equations):
+                            eq = canonical_equations[0]
+                            lhs, rhs = eq.split("=")
+                            val = float(sympify(rhs.strip()))
+                            return dspy.Prediction(
+                                solution={"result": val},
+                                success=True,
+                residuals={eq: 0.0},
+                error_msg=None
+            )
             # Handle different types of canonical equations
             equations_to_solve = []
             for eq in canonical_equations:
@@ -292,7 +310,7 @@ class Verifier(dspy.Module):
         eq_str = re.sub(r'\s+', ' ', eq_str).strip()
         
         # Handle specific patterns
-        eq_str = eq_str.replace(' x ', ' * ')  # word "x" to multiplication
+        # eq_str = eq_str.replace(' x ', ' * ')  # REMOVED: Breaks variable 'x'
         eq_str = eq_str.replace('Area =', 'A =')
         eq_str = eq_str.replace('length x width', 'l * w')
         
@@ -372,99 +390,59 @@ class Verifier(dspy.Module):
 # LLM Reasoner with MLX Mistral
 # --------------------------
 class LLMReasoner(dspy.Module):
-    """Uses MLX Mistral to extract equations from problems and similar examples"""
-    
-    def __init__(self, model=None, tokenizer=None):
+    """Uses GGUF Mistral via CTransformers"""
+
+    def __init__(self, llm=None):
         super().__init__()
-        if model is None or tokenizer is None:
-            self.model, self.tokenizer = initialize_mlx_mistral_model()
-        else:
-            self.model = model
-            self.tokenizer = tokenizer
-    
-    def build_prompt(self, query: str, canonical_eqs: List, retrieved_examples: List[Dict], max_shots: int = 3) -> str:
-        """Build prompt for MLX Mistral model"""
-        system_instruction = """You are a Python coding assistant.
+        self.llm = llm
+
+    def build_prompt(self, query: str) -> str:
+        return f"""You are a Python coding assistant.
 Convert the word problem into a SymPy equation.
-1. Import symbols and Eq from sympy.
-2. Define variables.
-3. Define the equation using `Eq()` and ASSIGN it to a variable named 'equation'.
-4. Output ONLY the Python code. No explanation. No markdown."""
 
-        user_content = f"{system_instruction}\n\nProblem: {query}\nCode:"
+Rules:
+1. Import symbols and Eq from sympy
+2. Define variables
+3. Define equation using Eq()
+4. Assign it to variable named `equation`
+5. Output ONLY Python code
 
-        return user_content
+Problem:
+{query}
 
-    def forward(self, query_text: str, canonical_equations: List, retrieved_examples: List[Dict]):
+Code:
+"""
+
+    def _normalize_llm_equations(self, equations):
+        normalized = []
+        for eq in equations:
+            if isinstance(eq, str) and "," in eq and "=" not in eq:
+                left, right = eq.split(",", 1)
+                normalized.append(f"{left.strip()} = {right.strip()}")
+            else:
+                normalized.append(eq)
+        return normalized
+    def forward(self, query_text, canonical_equations, retrieved_examples):
         try:
-            # First try pattern-based extraction for common problems
-            pattern_equations = self._extract_equations_by_pattern(query_text)
-            if pattern_equations:
-                print(f"🔍 Pattern-based extraction found: {pattern_equations}")
-                return dspy.Prediction(
-                    llm_equations=pattern_equations,
-                    llm_solution={},
-                    llm_steps="Pattern-based equation extraction",
-                    success=True
-                )
-            
-            if self.model is None or self.tokenizer is None:
-                print("⚠️ No LLM model available, using fallback extraction")
-                equations = [str(eq) for eq in (canonical_equations or [])]
-                return dspy.Prediction(
-                    llm_equations=equations,
-                    llm_solution={},
-                    llm_steps="Used fallback equation extraction",
-                    success=bool(equations)
-                )
-            
-            # Build prompt
-            user_content = self.build_prompt(query_text, canonical_equations, retrieved_examples)
-            
-            # Apply chat template
-            messages = [{"role": "user", "content": user_content}]
-            prompt = self.tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            
-            # Generate with MLX
-            print(f"🔍 Generating with MLX Mistral...")
-            generated_text = generate(
-                self.model,
-                self.tokenizer,
-                prompt=prompt,
-                max_tokens=200,
-                verbose=False
-            )
-            
-            print(f"🔍 LLM Raw Response:\n{generated_text[:300]}...")
-            
-            # Validate and extract SymPy equation
-            equations = self._validate_and_extract_sympy(generated_text)
-            
-            if not equations:
-                # Try fallback extraction
-                fallback_equations = self._create_fallback_equations(query_text)
-                if fallback_equations:
-                    equations = fallback_equations
-                elif canonical_equations:
-                    equations = [str(eq) for eq in canonical_equations]
-            
+            prompt = self.build_prompt(query_text)
+            response = self.llm(prompt, max_new_tokens=200)
+
+            equations = self._normalize_llm_equations(
+    self._validate_and_extract_sympy(response)
+)
+
             return dspy.Prediction(
                 llm_equations=equations,
                 llm_solution={},
-                llm_steps=generated_text,
+                llm_steps=response,
                 success=bool(equations)
             )
-                
+
         except Exception as e:
-            print(f"⚠️ LLM Reasoning failed: {str(e)}")
             return dspy.Prediction(
                 llm_equations=[],
                 llm_solution={},
-                llm_steps=f"Error: {str(e)}",
+                llm_steps=str(e),
                 success=False
             )
     
@@ -723,7 +701,7 @@ class SmartRetrievalPipeline(dspy.Module):
     - Comprehensive error handling
     """
     
-    def __init__(self, index_path: str, idmap_path: str, model=None, tokenizer=None):
+    def __init__(self, index_path: str, idmap_path: str, llm, model=None, tokenizer=None):
         super().__init__()
         
         print("Loading DSPy Hybrid Neuro-Symbolic Retrieval System with MLX Mistral...")
@@ -745,13 +723,13 @@ class SmartRetrievalPipeline(dspy.Module):
         # Neuro-symbolic components
         self.sym_solver = SymbolicSolver()
         self.verifier = Verifier()
-        self.llm_reasoner = LLMReasoner(model, tokenizer)
+        self.llm_reasoner = LLMReasoner(llm)
         
         print(f"✓ System Loaded Successfully!")
         print(f"  Knowledge Base: {len(self.problem_db)} math problems")
         print(f"  Index dimension: {self.index.d}")
-        if self.llm_reasoner.model is not None:
-            print(f"  LLM Model: MLX Mistral-7B-Instruct-v0.3-4bit")
+        if self.llm_reasoner.llm is not None:
+            print(f"  LLM Model: CTransformers Mistral-7B-Instruct-v0.2-GGUF")
         else:
             print(f"  LLM Model: Not available")
         print()
@@ -837,7 +815,7 @@ class SmartRetrievalPipeline(dspy.Module):
                         equations=canonical
                     )
         
-        # Step 9: MLX Mistral LLM fallback - extract equations and try symbolic solving
+        # Step 9: GGUF Mistral LLM fallback - extract equations and try symbolic solving
         try:
             llm_out = self.llm_reasoner(text, canonical, retrieved_results)
             if getattr(llm_out, "success", False) and llm_out.llm_equations:
@@ -897,6 +875,7 @@ class SmartRetrievalPipeline(dspy.Module):
         """
         text_lower = text.lower()
         equations = []
+        # Updated regex to correctly identify decimal numbers
         numbers = re.findall(r'\b(\d+(?:\.\d+)?)\b', text)
         
         if len(numbers) < 2:
@@ -1327,9 +1306,9 @@ class ComprehensiveMetricsEvaluator:
 # --------------------------
 # CTransformers Model Initialization (alias for compatibility)
 # --------------------------
-def initialize_ctransformers_model():
-    """Alias for MLX initialization for compatibility"""
-    return initialize_mlx_mistral_model()
+# def initialize_ctransformers_model():
+#     """Alias for GGUF initialization for compatibility"""
+#     return initialize_mlx_mistral_model()
 
 # --------------------------
 # Explain Similarity

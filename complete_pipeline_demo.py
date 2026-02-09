@@ -14,6 +14,7 @@ Comprehensive demonstration of the entire DSPy neuro-symbolic system:
 import time
 import textwrap
 import numpy as np
+import math
 import json
 from typing import List, Dict, Any
 from dspy_modules import (
@@ -21,14 +22,14 @@ from dspy_modules import (
     SymbolicSolver, 
     Verifier, 
     LLMReasoner,
-    initialize_ctransformers_model,
     explain_similarity,
     ComprehensiveMetricsEvaluator
 )
 from pipeline_sequence.embedder import encode_texts
 import re
-from mlx_lm import load, generate
 from sympy import symbols, Eq, pi
+from ctransformers import AutoModelForCausalLM
+
 
 
 class CompletePipelineDemo:
@@ -73,6 +74,16 @@ class CompletePipelineDemo:
             'relevant_items': []
         }
 
+    def initialize_llm(self):
+        return AutoModelForCausalLM.from_pretrained(
+            "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+            model_file="mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+            model_type="mistral",
+            context_length=4096,
+            gpu_layers=0
+        )
+
+
     def load_complete_system(self):
         """Load the complete neuro-symbolic system with all components"""
         print("🚀 LOADING COMPLETE NEURO-SYMBOLIC PIPELINE")
@@ -87,27 +98,25 @@ class CompletePipelineDemo:
         
         try:
             # Initialize CTransformers LLM
-            print("\n🤖 Step 1: Initializing CTransformers LLM...")
-            self.llm_model, self.llm_tokenizer = initialize_ctransformers_model()
+            print("\n🤖 Step 1: Initializing GGUF Mistral (CTransformers)...")
+            self.llm_model = self.initialize_llm()
 
-            if self.llm_model is not None:
-                print("✅ CTransformers LLM loaded successfully!")
-            else:
-                print("⚠️ CTransformers LLM not available, will use fallback methods")
+            print("✅ GGUF Mistral loaded successfully!")
 
             # Load main pipeline with LLM
             print("\n🔄 Step 2: Loading main neuro-symbolic pipeline...")
             self.pipeline = SmartRetrievalPipeline(
                 self.index_path,
                 self.idmap_path,
-                model=self.llm_model,
-                tokenizer=self.llm_tokenizer
+                llm=self.llm_model
             )
+
+            self.llm_reasoner = LLMReasoner(self.llm_model)
             print("✅ Main pipeline loaded successfully!")
 
             # Initialize LLM reasoner
             print("\n🧠 Step 3: Initializing LLM reasoner...")
-            self.llm_reasoner = LLMReasoner(self.llm_model, self.llm_tokenizer)
+            
             print("✅ LLM reasoner initialized!")
 
             print("\n🎯 COMPLETE SYSTEM READY!")

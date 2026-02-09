@@ -206,9 +206,9 @@ class AdvancedMathParser:
         """Extract explicitly stated equations"""
         # Pattern 1: Simple equations like "x = 5 + 3"
         explicit_patterns = [
-            r'([xyz]\s*=\s*[^\.!?]+)',  # x = expression
-            r'(\w+\s*=\s*[^\.!?]+)',    # variable = expression
-            r'([^\.!?]*=\s*[^\.!?]+)',  # anything = anything
+            r'([xyz]\s*=\s*(?:[^.!?]|(?<=\d)\.(?=\d))+)',  # x = expression
+            r'([a-zA-Z_]\w*\s*=\s*(?:[^.!?]|(?<=\d)\.(?=\d))+)',    # variable = expression
+            r'((?:[^.!?]|(?<=\d)\.(?=\d))*=\s*(?:[^.!?]|(?<=\d)\.(?=\d))+)',  # anything = anything
         ]
         
         for pattern in explicit_patterns:
@@ -381,7 +381,7 @@ class AdvancedMathParser:
         variable = match.group(1)
         self.variables.add(variable)
         # Look for equation in context
-        eq_match = re.search(r'([^\.!?]*=\s*[^\.!?]+)', original_text)
+        eq_match = re.search(r'((?:[^.!?]|(?<=\d)\.(?=\d))*=\s*(?:[^.!?]|(?<=\d)\.(?=\d))+)', original_text)
         if eq_match:
             return [eq_match.group(1)]
         return [f"{variable} = ?"]
