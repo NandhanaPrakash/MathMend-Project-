@@ -1,3 +1,4 @@
+from urllib import response
 import dspy
 import numpy as np
 import os
@@ -397,20 +398,30 @@ class LLMReasoner(dspy.Module):
         self.llm = llm
 
     def build_prompt(self, query: str) -> str:
-        return f"""You are a Python coding assistant.
-Convert the word problem into a SymPy equation.
+        return f"""You are an algebraic equation extractor.
 
-Rules:
-1. Import symbols and Eq from sympy
-2. Define variables
-3. Define equation using Eq()
-4. Assign it to variable named `equation`
-5. Output ONLY Python code
+Your task is ONLY to rewrite the mathematical relationship described in the problem as equation(s).
+
+STRICT RULES:
+- Do NOT solve the equation.
+- Do NOT simplify.
+- Do NOT rearrange unless necessary for clarity.
+- Do NOT compute numeric results.
+- Do NOT show steps.
+- Do NOT explain anything.
+- Output ONLY the original equation(s).
+- Each equation must contain exactly one "=".
+- No commentary.
+
+Example:
+Input: If x + 5 = 20, find x.
+Output:
+x + 5 = 20
 
 Problem:
 {query}
 
-Code:
+Equations:
 """
 
     def _normalize_llm_equations(self, equations):
@@ -426,10 +437,15 @@ Code:
         try:
             prompt = self.build_prompt(query_text)
             response = self.llm(prompt, max_new_tokens=200)
+            print("RAW LLM OUTPUT:")
+            print(response)
+
 
             equations = self._normalize_llm_equations(
-    self._validate_and_extract_sympy(response)
-)
+                self._validate_and_extract_sympy(response)
+            )
+            equations = list(dict.fromkeys(equations))
+
 
             return dspy.Prediction(
                 llm_equations=equations,
@@ -446,45 +462,77 @@ Code:
                 success=False
             )
     
-    def _validate_and_extract_sympy(self, code_string: str) -> List[Any]:
-        """Validate and extract SymPy equations from generated code"""
+    
+    def _validate_and_extract_sympy(self, raw_output: str) -> List[Eq]:
+        """
+        Parse plain algebraic equations from LLM output into SymPy Eq objects.
+
+        Assumes output contains lines like:
+            x + y = 50
+            2*x - y = 10
+
+        Filters out reasoning, commentary, and invalid lines.
+        """
+
         equations = []
 
-        try:
-            # Clean up markdown
-            code_string = code_string.replace("```python", "").replace("```", "").strip()
+        # --- 1️⃣ Clean markdown ---
+        raw_output = raw_output.replace("```", "").strip()
 
-            # Execute the code
-            local_vars = {}
-            exec(code_string, globals(), local_vars)
+        # --- 2️⃣ Split into lines ---
+        lines = raw_output.split("\n")
 
-            # Strategy 1: Look for the specific variable 'equation'
-            if 'equation' in local_vars and isinstance(local_vars['equation'], Eq):
-                equations.append(local_vars['equation'])
-                return equations
+        # --- 3️⃣ Define explanation keywords to reject ---
+        reject_keywords = [
+            "note", "cannot", "however", "therefore",
+            "approximate", "solution", "solve",
+            "since", "because", "thus"
+        ]
 
-            # Strategy 2: Look for ANY Eq object in locals
-            for var_name, var_val in local_vars.items():
-                if isinstance(var_val, Eq):
-                    equations.append(var_val)
+        valid_lines = []
 
-            if equations:
-                return equations
+        for line in lines:
+            line = line.strip()
 
-            # Strategy 3: Parse as string equations (fallback)
-            lines = code_string.split('\n')
-            for line in lines:
-                if 'Eq(' in line and '=' in line:
-                    # Extract equation string
-                    match = re.search(r'Eq\((.*?)\)', line)
-                    if match:
-                        eq_str = match.group(1)
-                        equations.append(eq_str)
+            if not line:
+                continue
 
-        except Exception as e:
-            print(f"⚠️ SymPy validation error: {e}")
+            # Must contain exactly ONE '='
+            if line.count("=") != 1:
+                continue
+
+            # Reject explanatory lines
+            lower_line = line.lower()
+            if any(word in lower_line for word in reject_keywords):
+                continue
+
+            # Reject lines that contain alphabetic sentences
+            # (e.g., long commentary with punctuation)
+            if re.search(r"[a-zA-Z]{4,}", line) and not re.search(r"[a-zA-Z]\s*[\+\-\*/=]", line):
+                continue
+
+            valid_lines.append(line)
+
+        # --- 4️⃣ Extract variables for safe sympify ---
+        variable_names = set(re.findall(r"[a-zA-Z]+", " ".join(valid_lines)))
+        symbol_dict = {v: symbols(v) for v in variable_names}
+
+        # --- 5️⃣ Convert to SymPy Eq objects ---
+        for line in valid_lines:
+            lhs_str, rhs_str = line.split("=")
+
+            try:
+                lhs = sympify(lhs_str.strip(), locals=symbol_dict)
+                rhs = sympify(rhs_str.strip(), locals=symbol_dict)
+                equations.append(Eq(lhs, rhs))
+            except Exception:
+                continue
+
+        # --- 6️⃣ Deduplicate while preserving order ---
+        equations = list(dict.fromkeys(equations))
 
         return equations
+
             # Clean up markdown
             # Clean up markdown
     
@@ -1329,41 +1377,41 @@ def explain_similarity(similarity_score):
 # --------------------------
 # Example Usage
 # --------------------------
-if __name__ == "__main__":
-    print("DSPy Hybrid Neuro-Symbolic Pipeline with MLX Mistral")
-    print("=" * 70)
+# if __name__ == "__main__":
+#     print("DSPy Hybrid Neuro-Symbolic Pipeline with MLX Mistral")
+#     print("=" * 70)
     
-    # Initialize the pipeline
-    INDEX_PATH = "path/to/your/faiss_index.index"
-    IDMAP_PATH = "path/to/your/idmap.json"
+#     # Initialize the pipeline
+#     INDEX_PATH = "path/to/your/faiss_index.index"
+#     IDMAP_PATH = "path/to/your/idmap.json"
     
-    # Load MLX Mistral model
-    model, tokenizer = initialize_mlx_mistral_model()
+#     # Load MLX Mistral model
+#     model, tokenizer = initialize_mlx_mistral_model()
     
-    # Create pipeline
-    pipeline = SmartRetrievalPipeline(INDEX_PATH, IDMAP_PATH, model, tokenizer)
+#     # Create pipeline
+#     pipeline = SmartRetrievalPipeline(INDEX_PATH, IDMAP_PATH, model, tokenizer)
     
-    # Test problems
-    test_problems = [
-        "Two numbers sum to 50 and their difference is 10. What are the numbers?",
-        "What is 15 plus 25?",
-        "The perimeter of a rectangular garden, with length L and width W, is 100 feet."
-    ]
+#     # Test problems
+#     test_problems = [
+#         "Two numbers sum to 50 and their difference is 10. What are the numbers?",
+#         "What is 15 plus 25?",
+#         "The perimeter of a rectangular garden, with length L and width W, is 100 feet."
+#     ]
     
-    for problem in test_problems:
-        print(f"\n{'='*70}")
-        print(f"Problem: {problem}")
-        print(f"{'-'*70}")
+#     for problem in test_problems:
+#         print(f"\n{'='*70}")
+#         print(f"Problem: {problem}")
+#         print(f"{'-'*70}")
         
-        result = pipeline(problem, top_k=5)
+#         result = pipeline(problem, top_k=5)
         
-        print(f"Result Type: {result.result_type}")
-        if hasattr(result, 'solution'):
-            print(f"Solution: {result.solution}")
-        if hasattr(result, 'equations'):
-            print(f"Equations: {result.equations}")
-        if hasattr(result, 'reasoning'):
-            print(f"Reasoning: {result.reasoning[:200]}...")
+#         print(f"Result Type: {result.result_type}")
+#         if hasattr(result, 'solution'):
+#             print(f"Solution: {result.solution}")
+#         if hasattr(result, 'equations'):
+#             print(f"Equations: {result.equations}")
+#         if hasattr(result, 'reasoning'):
+#             print(f"Reasoning: {result.reasoning[:200]}...")
         
-    print(f"\n{'='*70}")
-    print("Pipeline execution completed!")
+#     print(f"\n{'='*70}")
+#     print("Pipeline execution completed!")
